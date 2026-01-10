@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../database/database.dart';
@@ -11,6 +12,8 @@ import '../widgets/device_tile.dart';
 import 'packet_inspector_screen.dart';
 
 typedef PinnedDevice = models.PinnedDevice;
+
+const String _quickstartShownKey = 'quickstart_dialog_dismissed';
 
 class ScanScreen extends StatefulWidget {
   const ScanScreen({super.key});
@@ -25,12 +28,47 @@ class _ScanScreenState extends State<ScanScreen> {
   StreamSubscription<Map<String, dynamic>>? _scanSubscription;
   bool _isScanning = false;
   bool _hasPermissions = false;
+  bool _quickstartChecked = false;
 
   @override
   void initState() {
     super.initState();
     _checkPermissions();
     _loadPinnedDevices();
+    _checkQuickstartDialog();
+  }
+
+  Future<void> _checkQuickstartDialog() async {
+    final prefs = await SharedPreferences.getInstance();
+    final dismissed = prefs.getBool(_quickstartShownKey) ?? false;
+    if (!dismissed && mounted) {
+      setState(() {
+        _quickstartChecked = true;
+      });
+      // Show dialog after build completes
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _showQuickstartDialog();
+        }
+      });
+    } else {
+      setState(() {
+        _quickstartChecked = true;
+      });
+    }
+  }
+
+  Future<void> _showQuickstartDialog() async {
+    final dontShowAgain = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const QuickstartDialog(),
+    );
+
+    if (dontShowAgain == true) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_quickstartShownKey, true);
+    }
   }
 
   @override
@@ -157,6 +195,11 @@ class _ScanScreenState extends State<ScanScreen> {
       appBar: AppBar(
         title: const Text('BLE Scanner'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.help_outline),
+            onPressed: _showQuickstartDialog,
+            tooltip: 'Quick Start Guide',
+          ),
           if (_isScanning)
             IconButton(
               icon: const Icon(Icons.stop),
@@ -241,6 +284,200 @@ class _ScanScreenState extends State<ScanScreen> {
               icon: const Icon(Icons.bluetooth_searching),
               label: const Text('Scan'),
             ),
+    );
+  }
+}
+
+/// Quickstart dialog explaining the workflow
+class QuickstartDialog extends StatefulWidget {
+  const QuickstartDialog({super.key});
+
+  @override
+  State<QuickstartDialog> createState() => _QuickstartDialogState();
+}
+
+class _QuickstartDialogState extends State<QuickstartDialog> {
+  bool _dontShowAgain = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Row(
+        children: [
+          Icon(
+            Icons.lightbulb_outline,
+            color: Theme.of(context).colorScheme.primary,
+          ),
+          const SizedBox(width: 12),
+          const Text('Quick Start'),
+        ],
+      ),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Welcome to Tentacle Sync Capture!',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'Follow these steps to capture and monitor timecode:',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 16),
+            _buildStep(
+              context,
+              number: 1,
+              icon: Icons.bluetooth_searching,
+              title: 'Start BLE Scan',
+              description: 'Tap the Scan button to discover nearby Tentacle Sync devices.',
+            ),
+            const SizedBox(height: 12),
+            _buildStep(
+              context,
+              number: 2,
+              icon: Icons.touch_app,
+              title: 'Select Device',
+              description: 'Tap on a device to open the Packet Inspector and view raw BLE data.',
+            ),
+            const SizedBox(height: 12),
+            _buildStep(
+              context,
+              number: 3,
+              icon: Icons.access_time,
+              title: 'Choose Timecode Offset',
+              description: 'In the Timecode tab, select the decode hypothesis that shows valid timecode values.',
+            ),
+            const SizedBox(height: 12),
+            _buildStep(
+              context,
+              number: 4,
+              icon: Icons.monitor,
+              title: 'Send to Monitor',
+              description: 'Tap "Open in Monitor" to watch the timecode live in the Monitor tab.',
+            ),
+            const SizedBox(height: 20),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.primaryContainer.withAlpha(100),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.tips_and_updates,
+                    size: 20,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      'Tip: Use "Smooth" mode in the Monitor tab for interpolated display between packets.',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Checkbox(
+                  value: _dontShowAgain,
+                  onChanged: (value) {
+                    setState(() {
+                      _dontShowAgain = value ?? false;
+                    });
+                  },
+                ),
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () {
+                      setState(() {
+                        _dontShowAgain = !_dontShowAgain;
+                      });
+                    },
+                    child: Text(
+                      "Don't show this again",
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(_dontShowAgain),
+          child: const Text('Get Started'),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildStep(
+    BuildContext context, {
+    required int number,
+    required IconData icon,
+    required String title,
+    required String description,
+  }) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 28,
+          height: 28,
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.primary,
+            shape: BoxShape.circle,
+          ),
+          child: Center(
+            child: Text(
+              '$number',
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.onPrimary,
+                fontWeight: FontWeight.bold,
+                fontSize: 14,
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(icon, size: 16, color: Theme.of(context).colorScheme.primary),
+                  const SizedBox(width: 6),
+                  Text(
+                    title,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                description,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
