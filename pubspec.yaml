@@ -1,0 +1,45 @@
+name: tentacle_sync_capture
+description: "BLE Timecode Capture & Reverse-Engineering Decode App for Tentacle Sync"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.7.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  # Database
+  drift: ^2.14.0
+  sqlite3_flutter_libs: ^0.5.0
+
+  # File system & paths
+  path_provider: ^2.1.0
+  path: ^1.8.0
+
+  # Permissions
+  permission_handler: ^11.0.0
+
+  # State management
+  provider: ^6.1.0
+
+  # Utilities
+  intl: ^0.18.0
+  uuid: ^4.2.0
+  archive: ^3.4.0
+  share_plus: ^7.2.0
+  device_info_plus: ^9.1.0
+  package_info_plus: ^5.0.0
+  collection: ^1.18.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+  drift_dev: ^2.14.0
+  build_runner: ^2.4.0
+
+flutter:
+  uses-material-design: true
