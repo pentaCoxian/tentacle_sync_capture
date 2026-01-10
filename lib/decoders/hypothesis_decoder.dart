@@ -191,19 +191,38 @@ class HypothesisDecoder {
     final ss = payload[offset + 2];
     final ff = payload[offset + 3];
 
-    // Validate ranges
-    if (hh > 23) return null;
-    if (mm > 59) return null;
-    if (ss > 59) return null;
-    if (ff > 60) return null;
+    // For offset 14 (Tentacle Sync default), always generate hypothesis
+    // even if values seem out of range - let user decide
+    final isTentacleDefault = offset == 14;
+
+    // Validate ranges (skip validation for Tentacle default offset)
+    if (!isTentacleDefault) {
+      if (hh > 23) return null;
+      if (mm > 59) return null;
+      if (ss > 59) return null;
+      if (ff > 60) return null;
+    }
+
+    // Give highest confidence to offset 14 (known Tentacle Sync timecode location)
+    // Lower confidence if values are out of typical range
+    int baseConfidence;
+    if (isTentacleDefault) {
+      // Check if values are in valid range
+      final isValidRange = hh <= 23 && mm <= 59 && ss <= 59 && ff <= 60;
+      baseConfidence = isValidRange ? 90 : 70; // Still high priority even if values look off
+    } else {
+      baseConfidence = 45;
+    }
 
     return TimecodeHypothesis(
       strategy: DecodeStrategy.directMapping,
-      timecode: Timecode(hours: hh, minutes: mm, seconds: ss, frames: ff),
+      timecode: Timecode(hours: hh % 24, minutes: mm % 60, seconds: ss % 60, frames: ff % 61),
       byteOffset: offset,
       byteLength: 4,
-      confidence: 45,
-      explanation: 'Direct byte mapping at offset $offset',
+      confidence: baseConfidence,
+      explanation: isTentacleDefault
+          ? 'Direct byte mapping at offset $offset (Tentacle Sync default)'
+          : 'Direct byte mapping at offset $offset',
     );
   }
 
