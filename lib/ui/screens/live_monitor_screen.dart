@@ -78,6 +78,8 @@ class _LiveMonitorScreenState extends State<LiveMonitorScreen> {
   DateTime? _lastRawTimecodeTime;
   Timecode? _interpolatedTimecode;
   double _effectiveFps = 25.0; // Default FPS for interpolation
+  int _filteredPacketCount = 0; // Count of packets filtered due to invalid jumps
+  bool _lastPacketWasFiltered = false; // Whether the last packet was filtered
 
   List<PinnedDevice> _pinnedDevices = [];
   PinnedDevice? _selectedDevice;
@@ -202,12 +204,29 @@ class _LiveMonitorScreenState extends State<LiveMonitorScreen> {
 
       setState(() {
         if (decodedTimecode != null) {
+          // Always update raw timecode (shown in raw mode)
           _directTimecode = decodedTimecode;
-          // Store raw timecode info for interpolation
-          _lastRawTimecode = decodedTimecode;
-          _lastRawTimecodeTime = DateTime.now();
-          // Sync interpolated timecode to raw when we get a new packet
-          _interpolatedTimecode = decodedTimecode;
+
+          // For interpolated mode, validate the timecode before syncing
+          final isValid = _isValidTimecode(decodedTimecode);
+          final isReasonable = _displayMode == TimecodeDisplayMode.interpolated
+              ? _isReasonableJump(_lastRawTimecode, decodedTimecode)
+              : true;
+
+          if (isValid && isReasonable) {
+            // Store raw timecode info for interpolation
+            _lastRawTimecode = decodedTimecode;
+            _lastRawTimecodeTime = DateTime.now();
+            // Sync interpolated timecode to raw when we get a valid packet
+            _interpolatedTimecode = decodedTimecode;
+            _lastPacketWasFiltered = false;
+          } else if (_displayMode == TimecodeDisplayMode.interpolated) {
+            // Track filtered packets in interpolated mode
+            _filteredPacketCount++;
+            _lastPacketWasFiltered = true;
+          }
+          // If invalid or unreasonable jump in interpolated mode,
+          // we skip syncing and let interpolation continue from last known good value
         }
         _lastRssi = rssi;
         _directRawBytes = rawBytes;
@@ -287,6 +306,57 @@ class _LiveMonitorScreenState extends State<LiveMonitorScreen> {
         _interpolationTimer = null;
       }
     });
+  }
+
+  /// Check if a timecode has valid ranges (hours 0-23, minutes 0-59, seconds 0-59, frames 0-fps)
+  bool _isValidTimecode(Timecode tc) {
+    final maxFrames = _effectiveFps.round();
+    return tc.hours >= 0 && tc.hours <= 23 &&
+           tc.minutes >= 0 && tc.minutes <= 59 &&
+           tc.seconds >= 0 && tc.seconds <= 59 &&
+           tc.frames >= 0 && tc.frames < maxFrames + 5; // Allow small tolerance for frame count
+  }
+
+  /// Convert timecode to total frames for comparison
+  int _timecodeToTotalFrames(Timecode tc) {
+    final fps = _effectiveFps.round();
+    return tc.hours * 3600 * fps +
+           tc.minutes * 60 * fps +
+           tc.seconds * fps +
+           tc.frames;
+  }
+
+  /// Check if a new timecode represents a reasonable jump from the previous one
+  /// Returns true if the jump is acceptable (within ~2 seconds of expected value)
+  bool _isReasonableJump(Timecode? previous, Timecode newTc) {
+    if (previous == null) return true;
+
+    final fps = _effectiveFps.round();
+    final previousFrames = _timecodeToTotalFrames(previous);
+    final newFrames = _timecodeToTotalFrames(newTc);
+
+    // Calculate expected frames based on elapsed time since last raw packet
+    final elapsed = _lastRawTimecodeTime != null
+        ? DateTime.now().difference(_lastRawTimecodeTime!).inMilliseconds
+        : 0;
+    final expectedAdvance = (elapsed * fps / 1000).round();
+
+    // The new timecode should be within a reasonable range of what we expect
+    // Allow for some jitter: expected advance +/- 2 seconds worth of frames
+    final tolerance = fps * 2; // 2 seconds tolerance
+
+    // Handle wrap around at 24 hours
+    final maxFrames = 24 * 3600 * fps;
+    var expectedFrames = (previousFrames + expectedAdvance) % maxFrames;
+
+    // Check forward direction (normal case)
+    var diff = (newFrames - expectedFrames).abs();
+    if (diff > maxFrames ~/ 2) {
+      // Handle wrap-around
+      diff = maxFrames - diff;
+    }
+
+    return diff <= tolerance;
   }
 
   Uint8List _decodeBase64(String base64) {
@@ -504,6 +574,10 @@ class _LiveMonitorScreenState extends State<LiveMonitorScreen> {
                     _displayMode = selected.first;
                     if (_displayMode == TimecodeDisplayMode.interpolated) {
                       _interpolatedTimecode = _directTimecode;
+                      _lastRawTimecode = _directTimecode;
+                      _lastRawTimecodeTime = DateTime.now();
+                      _filteredPacketCount = 0;
+                      _lastPacketWasFiltered = false;
                       _startInterpolationTimer();
                     } else {
                       _interpolationTimer?.cancel();
@@ -569,26 +643,58 @@ class _LiveMonitorScreenState extends State<LiveMonitorScreen> {
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                       decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                        color: _lastPacketWasFiltered && _displayMode == TimecodeDisplayMode.interpolated
+                            ? Colors.orange.withAlpha(30)
+                            : Theme.of(context).colorScheme.surfaceContainerHighest,
                         borderRadius: BorderRadius.circular(8),
+                        border: _lastPacketWasFiltered && _displayMode == TimecodeDisplayMode.interpolated
+                            ? Border.all(color: Colors.orange.withAlpha(100))
+                            : null,
                       ),
                       child: Column(
                         children: [
-                          Text(
-                            _directRawBytes,
-                            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                                  fontFamily: 'monospace',
-                                  letterSpacing: 2,
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (_lastPacketWasFiltered && _displayMode == TimecodeDisplayMode.interpolated)
+                                Padding(
+                                  padding: const EdgeInsets.only(right: 8),
+                                  child: Icon(Icons.filter_alt, size: 14, color: Colors.orange),
                                 ),
+                              Text(
+                                _directRawBytes,
+                                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                      fontFamily: 'monospace',
+                                      letterSpacing: 2,
+                                      color: _lastPacketWasFiltered && _displayMode == TimecodeDisplayMode.interpolated
+                                          ? Colors.orange
+                                          : null,
+                                    ),
+                              ),
+                            ],
                           ),
                           if (_displayMode == TimecodeDisplayMode.interpolated &&
                               _directTimecode != null) ...[
                             const SizedBox(height: 4),
                             Text(
-                              'Last raw: ${_directTimecode}',
+                              _lastPacketWasFiltered
+                                  ? 'Filtered: ${_directTimecode} (invalid jump)'
+                                  : 'Last raw: ${_directTimecode}',
                               style: Theme.of(context).textTheme.bodySmall?.copyWith(
                                     fontFamily: 'monospace',
-                                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                                    color: _lastPacketWasFiltered
+                                        ? Colors.orange
+                                        : Theme.of(context).colorScheme.onSurfaceVariant,
+                                  ),
+                            ),
+                          ],
+                          if (_filteredPacketCount > 0 && _displayMode == TimecodeDisplayMode.interpolated) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              '$_filteredPacketCount packets filtered',
+                              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                    fontSize: 10,
+                                    color: Colors.orange.withAlpha(180),
                                   ),
                             ),
                           ],
