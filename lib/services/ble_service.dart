@@ -139,6 +139,51 @@ class BleService {
     return result ?? 'unknown';
   }
 
+  // IPC methods for broadcasting timecode to other apps
+  Future<void> setIpcEnabled(bool enabled) async {
+    await _methodChannel.invokeMethod('setIpcEnabled', {'enabled': enabled});
+  }
+
+  Future<bool> isIpcEnabled() async {
+    final result = await _methodChannel.invokeMethod<bool>('isIpcEnabled');
+    return result ?? false;
+  }
+
+  /// Broadcast timecode to other Android apps via broadcast intent.
+  ///
+  /// Other apps can receive by registering a BroadcastReceiver for action:
+  /// "com.example.tentacle_sync_capture.TIMECODE_UPDATE"
+  ///
+  /// Intent extras:
+  /// - hours, minutes, seconds, frames (Int)
+  /// - timecode (String, formatted HH:MM:SS:FF)
+  /// - fps (Double)
+  /// - dropFrame (Boolean)
+  /// - timestamp (Long, system time in millis)
+  /// - deviceAddress (String)
+  /// - deviceName (String, optional)
+  Future<void> broadcastTimecode({
+    required int hours,
+    required int minutes,
+    required int seconds,
+    required int frames,
+    required double fps,
+    bool dropFrame = false,
+    required String deviceAddress,
+    String? deviceName,
+  }) async {
+    await _methodChannel.invokeMethod('broadcastTimecode', {
+      'hours': hours,
+      'minutes': minutes,
+      'seconds': seconds,
+      'frames': frames,
+      'fps': fps,
+      'dropFrame': dropFrame,
+      'deviceAddress': deviceAddress,
+      'deviceName': deviceName,
+    });
+  }
+
   List<dynamic> _parseJsonArray(String json) {
     // Simple JSON array parser
     if (json.isEmpty || json == '[]') return [];

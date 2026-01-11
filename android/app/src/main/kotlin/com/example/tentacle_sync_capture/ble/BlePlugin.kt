@@ -1,6 +1,7 @@
 package com.example.tentacle_sync_capture.ble
 
 import android.content.Context
+import com.example.tentacle_sync_capture.ipc.TimecodeBroadcastService
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
@@ -13,6 +14,7 @@ class BlePlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
     private lateinit var context: Context
     private lateinit var bleScanner: BleScanner
     private lateinit var gattManager: GattManager
+    private lateinit var timecodeBroadcastService: TimecodeBroadcastService
 
     companion object {
         const val METHOD_CHANNEL = "com.example.tentacle_sync_capture/ble_method"
@@ -31,6 +33,7 @@ class BlePlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
 
         bleScanner = BleScanner(context)
         gattManager = GattManager(context)
+        timecodeBroadcastService = TimecodeBroadcastService(context)
 
         scanEventChannel.setStreamHandler(bleScanner)
         gattEventChannel.setStreamHandler(gattManager)
@@ -118,6 +121,32 @@ class BlePlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
             }
             "getConnectionState" -> {
                 result.success(gattManager.getConnectionState())
+            }
+
+            // IPC methods
+            "setIpcEnabled" -> {
+                val enabled = call.argument<Boolean>("enabled") ?: false
+                timecodeBroadcastService.setEnabled(enabled)
+                result.success(null)
+            }
+            "isIpcEnabled" -> {
+                result.success(timecodeBroadcastService.isEnabled())
+            }
+            "broadcastTimecode" -> {
+                val hours = call.argument<Int>("hours") ?: 0
+                val minutes = call.argument<Int>("minutes") ?: 0
+                val seconds = call.argument<Int>("seconds") ?: 0
+                val frames = call.argument<Int>("frames") ?: 0
+                val fps = call.argument<Double>("fps") ?: 25.0
+                val dropFrame = call.argument<Boolean>("dropFrame") ?: false
+                val deviceAddress = call.argument<String>("deviceAddress") ?: ""
+                val deviceName = call.argument<String>("deviceName")
+
+                timecodeBroadcastService.broadcastTimecode(
+                    hours, minutes, seconds, frames,
+                    fps, dropFrame, deviceAddress, deviceName
+                )
+                result.success(null)
             }
 
             else -> result.notImplemented()

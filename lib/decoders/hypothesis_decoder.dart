@@ -89,13 +89,17 @@ class HypothesisDecoder {
     if (ss < 0 || ss > 59) return null;
     if (ff < 0 || ff > 60) return null; // Allow up to 60 for various frame rates
 
+    // Infer fps from frame value
+    final inferredFps = _inferFpsFromFrameValue(ff);
+
     return TimecodeHypothesis(
       strategy: DecodeStrategy.bcd,
       timecode: Timecode(hours: hh, minutes: mm, seconds: ss, frames: ff),
       byteOffset: offset,
       byteLength: 4,
       confidence: 50, // Base confidence, will be adjusted
-      explanation: 'BCD decode at offset $offset',
+      explanation: 'BCD decode at offset $offset (${inferredFps}fps)',
+      inferredFps: inferredFps,
     );
   }
 
@@ -214,6 +218,9 @@ class HypothesisDecoder {
       baseConfidence = 45;
     }
 
+    // Infer fps from frame value
+    final inferredFps = _inferFpsFromFrameValue(ff);
+
     return TimecodeHypothesis(
       strategy: DecodeStrategy.directMapping,
       timecode: Timecode(hours: hh % 24, minutes: mm % 60, seconds: ss % 60, frames: ff % 61),
@@ -221,8 +228,9 @@ class HypothesisDecoder {
       byteLength: 4,
       confidence: baseConfidence,
       explanation: isTentacleDefault
-          ? 'Direct byte mapping at offset $offset (Tentacle Sync default)'
-          : 'Direct byte mapping at offset $offset',
+          ? 'Direct byte mapping at offset $offset (Tentacle Sync default, ${inferredFps}fps)'
+          : 'Direct byte mapping at offset $offset (${inferredFps}fps)',
+      inferredFps: inferredFps,
     );
   }
 
@@ -232,6 +240,25 @@ class HypothesisDecoder {
     final low = bcd & 0x0F;
     if (high > 9 || low > 9) return -1;
     return high * 10 + low;
+  }
+
+  /// Infer fps from frame value (the ff component of timecode)
+  /// Standard SMPTE rates: 23.976, 24, 25, 29.97, 30
+  double _inferFpsFromFrameValue(int frameValue) {
+    // Frame value gives us a lower bound on fps
+    // If we see frame 29, fps must be at least 30
+    // If we see frame 25, fps must be at least 26 (so 30 or 29.97)
+    // If we see frame 24, fps could be 25, 29.97, or 30
+    if (frameValue >= 30) {
+      return 30.0; // Could be higher but 30 is safe
+    } else if (frameValue >= 25) {
+      return 30.0; // 25-29 means 30fps (or 29.97)
+    } else if (frameValue >= 24) {
+      return 25.0; // 24 could be 25fps
+    } else {
+      // Frame values 0-23 are ambiguous, default to 24fps
+      return 24.0;
+    }
   }
 
   /// Convert frame count to timecode

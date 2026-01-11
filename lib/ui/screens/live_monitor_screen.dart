@@ -81,6 +81,9 @@ class _LiveMonitorScreenState extends State<LiveMonitorScreen> {
   int _filteredPacketCount = 0; // Count of packets filtered due to invalid jumps
   bool _lastPacketWasFiltered = false; // Whether the last packet was filtered
 
+  // IPC broadcast state
+  bool _ipcEnabled = false;
+
   List<PinnedDevice> _pinnedDevices = [];
   PinnedDevice? _selectedDevice;
 
@@ -207,6 +210,10 @@ class _LiveMonitorScreenState extends State<LiveMonitorScreen> {
           // Always update raw timecode (shown in raw mode)
           _directTimecode = decodedTimecode;
 
+          // Dynamically update effective fps based on observed frame values
+          // If we see frames >= 25, we know it's 30fps (not 25fps default)
+          _updateEffectiveFpsFromFrame(decodedTimecode.frames);
+
           // For interpolated mode, validate the timecode before syncing
           final isValid = _isValidTimecode(decodedTimecode);
           final isReasonable = _displayMode == TimecodeDisplayMode.interpolated
@@ -227,6 +234,11 @@ class _LiveMonitorScreenState extends State<LiveMonitorScreen> {
           }
           // If invalid or unreasonable jump in interpolated mode,
           // we skip syncing and let interpolation continue from last known good value
+
+          // Broadcast timecode via IPC if enabled
+          if (_ipcEnabled) {
+            _broadcastTimecode(decodedTimecode);
+          }
         }
         _lastRssi = rssi;
         _directRawBytes = rawBytes;
@@ -308,6 +320,34 @@ class _LiveMonitorScreenState extends State<LiveMonitorScreen> {
     });
   }
 
+  /// Toggle IPC broadcast on/off
+  Future<void> _toggleIpc(bool enabled) async {
+    final bleService = context.read<BleService>();
+    await bleService.setIpcEnabled(enabled);
+    setState(() {
+      _ipcEnabled = enabled;
+    });
+  }
+
+  /// Broadcast the current timecode via IPC
+  void _broadcastTimecode(Timecode timecode) {
+    if (!_ipcEnabled || widget.monitorConfig == null) return;
+
+    final bleService = context.read<BleService>();
+    final config = widget.monitorConfig!;
+
+    bleService.broadcastTimecode(
+      hours: timecode.hours,
+      minutes: timecode.minutes,
+      seconds: timecode.seconds,
+      frames: timecode.frames,
+      fps: _effectiveFps, // Use dynamically updated fps (corrected from frame observations)
+      dropFrame: timecode.dropFrame,
+      deviceAddress: config.deviceAddress,
+      deviceName: config.deviceName,
+    );
+  }
+
   /// Check if a timecode has valid ranges (hours 0-23, minutes 0-59, seconds 0-59, frames 0-fps)
   bool _isValidTimecode(Timecode tc) {
     final maxFrames = _effectiveFps.round();
@@ -357,6 +397,19 @@ class _LiveMonitorScreenState extends State<LiveMonitorScreen> {
     }
 
     return diff <= tolerance;
+  }
+
+  /// Dynamically update effective fps based on observed frame values.
+  /// This corrects for incorrect initial fps inference.
+  void _updateEffectiveFpsFromFrame(int frameValue) {
+    // Only update upward - if we see high frame values, we know fps must be higher
+    // Frame 29 means at least 30fps, frame 25-28 means at least 30fps
+    if (frameValue >= 25 && _effectiveFps < 30.0) {
+      _effectiveFps = 30.0;
+    } else if (frameValue >= 24 && _effectiveFps < 25.0) {
+      _effectiveFps = 25.0;
+    }
+    // Don't lower fps as low frame values are ambiguous
   }
 
   Uint8List _decodeBase64(String base64) {
@@ -586,6 +639,30 @@ class _LiveMonitorScreenState extends State<LiveMonitorScreen> {
                   });
                 }
               },
+            ),
+          ),
+
+          // IPC broadcast toggle
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Card(
+              child: SwitchListTile(
+                title: const Text('IPC Broadcast'),
+                subtitle: Text(
+                  _ipcEnabled
+                      ? 'Sending timecode to other apps'
+                      : 'Tap to broadcast timecode via intent',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                secondary: Icon(
+                  Icons.broadcast_on_personal,
+                  color: _ipcEnabled
+                      ? Theme.of(context).colorScheme.primary
+                      : Theme.of(context).colorScheme.outline,
+                ),
+                value: _ipcEnabled,
+                onChanged: _toggleIpc,
+              ),
             ),
           ),
 

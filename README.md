@@ -20,6 +20,7 @@ A Flutter Android application for capturing, analyzing, and decoding BLE timecod
   - Visual feedback showing filtered packet count
 - Real-time packet rate and FPS indicators
 - Confidence scoring for decode accuracy
+- **IPC Broadcast**: Send timecode to other Android apps via broadcast intent
 
 ### Packet Inspector
 - Raw hex viewer with byte highlighting
@@ -228,6 +229,120 @@ Event JSONL format:
 ```json
 {"id":"...","sessionId":"...","source":"ADV","tsMonotonicNanos":123456789,"tsWallMillis":1234567890123,"deviceAddress":"AA:BB:CC:DD:EE:FF","rssi":-65,"payload":"base64...","meta":{}}
 ```
+
+## IPC Broadcast (Inter-Process Communication)
+
+The app can broadcast decoded timecode to other Android apps using broadcast intents. This enables integration with custom camera apps, video recording tools, or any app that needs synchronized timecode.
+
+### Enabling IPC
+
+1. Open the Live Monitor screen with a selected timecode decode
+2. Toggle the "IPC Broadcast" switch to enable
+3. Timecode will be broadcast with each received packet
+
+### Receiving Timecode in Another App
+
+Register a BroadcastReceiver for the action:
+```
+com.example.tentacle_sync_capture.TIMECODE_UPDATE
+```
+
+#### Kotlin Example
+
+```kotlin
+class TimecodeReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action == "com.example.tentacle_sync_capture.TIMECODE_UPDATE") {
+            val hours = intent.getIntExtra("hours", 0)
+            val minutes = intent.getIntExtra("minutes", 0)
+            val seconds = intent.getIntExtra("seconds", 0)
+            val frames = intent.getIntExtra("frames", 0)
+            val timecode = intent.getStringExtra("timecode") ?: "00:00:00:00"
+            val fps = intent.getDoubleExtra("fps", 25.0)
+            val dropFrame = intent.getBooleanExtra("dropFrame", false)
+            val timestamp = intent.getLongExtra("timestamp", 0L)
+            val deviceAddress = intent.getStringExtra("deviceAddress") ?: ""
+            val deviceName = intent.getStringExtra("deviceName")
+
+            // Handle the timecode update
+            Log.d("Timecode", "Received: $timecode @ $fps fps from $deviceAddress")
+        }
+    }
+}
+
+// Register in Activity/Fragment
+val receiver = TimecodeReceiver()
+val filter = IntentFilter("com.example.tentacle_sync_capture.TIMECODE_UPDATE")
+registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
+```
+
+#### Flutter Example (receiving app)
+
+```dart
+// In your Android MainActivity.kt
+class MainActivity : FlutterActivity() {
+    private val TIMECODE_CHANNEL = "your.app/timecode"
+
+    override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+        super.configureFlutterEngine(flutterEngine)
+
+        val eventChannel = EventChannel(flutterEngine.dartExecutor.binaryMessenger, TIMECODE_CHANNEL)
+        eventChannel.setStreamHandler(TimecodeStreamHandler(this))
+    }
+
+    class TimecodeStreamHandler(private val context: Context) : EventChannel.StreamHandler {
+        private var receiver: BroadcastReceiver? = null
+
+        override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+            receiver = object : BroadcastReceiver() {
+                override fun onReceive(ctx: Context, intent: Intent) {
+                    events?.success(mapOf(
+                        "hours" to intent.getIntExtra("hours", 0),
+                        "minutes" to intent.getIntExtra("minutes", 0),
+                        "seconds" to intent.getIntExtra("seconds", 0),
+                        "frames" to intent.getIntExtra("frames", 0),
+                        "timecode" to intent.getStringExtra("timecode"),
+                        "fps" to intent.getDoubleExtra("fps", 25.0)
+                    ))
+                }
+            }
+            val filter = IntentFilter("com.example.tentacle_sync_capture.TIMECODE_UPDATE")
+            context.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
+        }
+
+        override fun onCancel(arguments: Any?) {
+            receiver?.let { context.unregisterReceiver(it) }
+            receiver = null
+        }
+    }
+}
+```
+
+```dart
+// In your Flutter Dart code
+final _timecodeChannel = EventChannel('your.app/timecode');
+
+_timecodeChannel.receiveBroadcastStream().listen((event) {
+  final timecode = event['timecode'] as String;
+  final fps = event['fps'] as double;
+  print('Received timecode: $timecode @ $fps fps');
+});
+```
+
+### Intent Extras
+
+| Extra | Type | Description |
+|-------|------|-------------|
+| `hours` | Int | Hours component (0-23) |
+| `minutes` | Int | Minutes component (0-59) |
+| `seconds` | Int | Seconds component (0-59) |
+| `frames` | Int | Frames component |
+| `timecode` | String | Formatted timecode (HH:MM:SS:FF or HH:MM:SS;FF for drop-frame) |
+| `fps` | Double | Frame rate (e.g., 23.976, 24, 25, 29.97, 30) |
+| `dropFrame` | Boolean | Whether drop-frame timecode is used |
+| `timestamp` | Long | System timestamp when captured (milliseconds) |
+| `deviceAddress` | String | BLE device MAC address |
+| `deviceName` | String? | BLE device name (may be null) |
 
 ## Development Notes
 
